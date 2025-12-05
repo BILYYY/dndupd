@@ -41,7 +41,7 @@ class AuctionGameRunner:
 if __name__ == "__main__":    
     host = "localhost"
     
-    n_rounds = 12
+    n_rounds = 1000
     if len(sys.argv) >= 2:
         n_rounds = int(sys.argv[1])
 
@@ -55,8 +55,3 @@ if __name__ == "__main__":
     runner.run()
     
     print("<game is done>")
-
-
-
-
-

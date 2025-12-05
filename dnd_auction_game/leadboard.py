@@ -21,7 +21,3 @@ def generate_leadboard(players, round, is_done, bank_state, gold_in_pool):
         gold_limit=bank_state["bank_limit_per_round"],
         gold_in_pool=gold_in_pool,
     )
-
-
-
-
