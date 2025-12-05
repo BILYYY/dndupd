@@ -1,7 +1,6 @@
 import os
 import random
 import math
-import numpy as np
 from collections import deque
 from dnd_auction_game.client import AuctionGameClient
 
@@ -69,19 +68,15 @@ class BillyX_Prime:
         buy_amount = 0
 
         # Condition 1: Emergency Liquidity
-        # If we have < 100 gold, we can't bid. Sell points to get back in the game.
         if my_gold < 150 and my_points > 50:
             buy_amount = 30  # Sell 30 points to get startup cash
 
         # Condition 2: Arbitrage (The "Juicy Pool")
-        # If the pool has a lot of gold, the exchange rate (Gold per Point) is high.
-        # We check roughly how many agents are alive. If pool > 3000, it's usually worth it.
-        # We only do this if we aren't leading by a huge margin (don't risk the win).
         if pool_gold > 3500 and my_points > 100:
              # If trailing, take bigger risk to catch up
             buy_amount = 60 if trailing else 25
 
-        # Safety: Never sell if it drops us below 0 points (game logic prevents it, but still)
+        # Safety: Never sell if it drops us below 0 points
         if buy_amount > my_points:
             buy_amount = int(my_points * 0.9)
 
@@ -125,7 +120,9 @@ class BillyX_Prime:
         evs = {aid: v for aid, v in evs.items() if (v > 0 or rounds_left <= 2)}
         
         if not evs: 
-            return {"bids": {}, "pool": 0}
+            # Fix: Return pool dictionary even if no bids
+            pool_buy = self.calculate_pool_strategy(gold, my_pts, pool_gold, phase, trailing)
+            return {"bids": {}, "pool": pool_buy}
 
         vals = sorted(evs.values())
         q1 = vals[len(vals) // 3]
@@ -155,9 +152,6 @@ class BillyX_Prime:
             planned.append((aid, v, base_bid))
 
         # --- OPTIMIZATION: RANK & ALLOCATE ---
-        # Efficiency Metric: Points per Effective Gold Cost
-        # Effective Cost = Bid * 0.5 (since we get 50% back if we lose)
-        # Note: This is a heuristic. If we win, cost is 100%. If we lose, cost is 0% (net).
         ranked = []
         for aid, v, b in planned:
             efficiency = v / max(1, b) 

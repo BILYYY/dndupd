@@ -5,9 +5,9 @@ from collections import deque
 from dnd_auction_game.client import AuctionGameClient
 
 ################################################################################
-# VALUE DUMPER AGENT
+# VALUE DUMPER AGENT (Fixed & Upgraded)
 # Strategy:
-# 1. EARLY GAME: "Value Investor"
+# 1. EARLY GAME (Rounds 1-970): "Value Investor"
 #    - Calculates (EV / Price) ratio.
 #    - Only bids if the item is "Cheap" (below market average cost).
 #    - Hoards gold to collect bank interest.
@@ -15,6 +15,10 @@ from dnd_auction_game.client import AuctionGameClient
 # 2. END GAME (Last 30 Rounds): "Liquidation"
 #    - Calculates remaining budget per round.
 #    - Bids aggressive premiums to ensure 100% of gold is spent by Round 1000.
+#
+# 3. POOL SMARTS:
+#    - Buys from pool if broke (Bankruptcy Protection).
+#    - Buys from pool if pool is huge (Arbitrage).
 ################################################################################
 
 # Standard EV table
@@ -36,9 +40,6 @@ class ValueDumperAgent:
         """Update our estimate of what points are worth"""
         if not prev_auctions: return
 
-        sum_ratios = 0
-        count = 0
-
         for _, auction in prev_auctions.items():
             bids = auction.get("bids", [])
             if not bids: continue
@@ -49,18 +50,29 @@ class ValueDumperAgent:
             if ev > 0:
                 ratio = win_gold / ev
                 self.market_ratios.append(ratio)
-                sum_ratios += ratio
-                count += 1
         
         # Update running average
         if self.market_ratios:
             self.avg_cost_per_point = sum(self.market_ratios) / len(self.market_ratios)
 
-    def calculate_pool_buy(self, my_gold, my_points):
-        """Don't die if we go broke"""
-        if my_gold < 100 and my_points > 30:
-            return 30
-        return 0
+    def calculate_pool_buy(self, my_gold, my_points, pool_gold, trailing):
+        """Smart Pool Logic: Don't die, and take free money"""
+        buy_amount = 0
+        
+        # 1. Bankruptcy Protection (Survive)
+        if my_gold < 150 and my_points > 30:
+            buy_amount = 30
+            
+        # 2. Arbitrage (Profit)
+        # If pool is huge (>4000), gold is cheap. Sell points to buy auctions.
+        elif pool_gold > 4000 and my_points > 100:
+            buy_amount = 50 if trailing else 25
+
+        # Safety Cap
+        if buy_amount > my_points:
+            buy_amount = int(my_points * 0.9)
+            
+        return int(buy_amount)
 
     def make_bid(self, agent_id, current_round, states, auctions, prev_auctions, pool_gold, prev_pool_buys, bank_state):
         # 1. Update Market Knowledge
@@ -74,6 +86,10 @@ class ValueDumperAgent:
         income_schedule = bank_state.get("gold_income_per_round", [])
         rounds_left = len(income_schedule) + 1
         
+        # Check if trailing (to adjust aggression)
+        others = [s["points"] for aid, s in states.items() if aid != agent_id]
+        trailing = bool(others and points < max(others) * 0.8)
+
         # 3. Strategy Selection
         panic_mode = (rounds_left <= 30)
         
@@ -93,22 +109,18 @@ class ValueDumperAgent:
         if panic_mode:
             # === END GAME: SPEND EVERYTHING ===
             # Calculate burn rate needed to hit 0 gold by end
-            # e.g., if 30 rounds left and 30,000 gold, spend 1000/round.
             target_spend = int(gold / max(1, rounds_left))
             
-            # Since we only win ~30-50% of auctions, we need to bid MORE than our target
-            # to actually spend that much. We apply a "Win Ratio Multiplier"
+            # Bid Multiplier to ensure we win
             bid_budget = target_spend * 2.5 
             
-            # Bid heavily on the best items
             for ev, aid in ranked_items:
                 if spent >= bid_budget: break
                 
-                # Pay a massive premium (Market Price * 1.5) to ensure we win
-                # This guarantees we convert gold to points before time runs out
+                # Pay massive premium (1.5x Market) to guarantee wins
                 target_price = int(ev * self.avg_cost_per_point * 1.5)
                 
-                # Cap at 50% of current gold to prevent instant bankruptcy on one item
+                # Cap at 50% gold to prevent instant bankruptcy
                 bid = min(target_price, int(gold * 0.5))
                 
                 if bid > 0 and (spent + bid) < gold:
@@ -117,13 +129,10 @@ class ValueDumperAgent:
 
         else:
             # === EARLY GAME: VALUE INVESTOR ===
-            # Only buy if "Points per Gold" is good (Cheap)
-            
-            # We want a discount. Target price is 90% of market average.
+            # Only buy if cheap (90% of market average)
             target_rate = self.avg_cost_per_point * 0.90
             
-            # Limit spending to keep cash for interest
-            # e.g., spend max 40% of gold in early game
+            # Limit spending to hoard interest
             spending_cap = int(gold * 0.40)
 
             for ev, aid in ranked_items:
@@ -139,7 +148,7 @@ class ValueDumperAgent:
                     spent += my_valuation
 
         # 4. Pool Safety
-        pool_buy = self.calculate_pool_buy(gold, points)
+        pool_buy = self.calculate_pool_buy(gold, points, pool_gold, trailing)
 
         return {"bids": bids, "pool": pool_buy}
 

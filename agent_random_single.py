@@ -4,9 +4,9 @@ from dnd_auction_game.client import AuctionGameClient
 
 ############################################################################################
 #
-# random_all_in (Fixed)
-#   Picks a single auction and bids a random fraction of the agent's gold.
-#   Includes safety checks to prevent crashing on empty auction lists.
+# Random All-In (Fixed)
+#   Picks a single auction and bids a massive chunk of gold.
+#   FIXED: Now returns 'pool' logic to prevent the 0-Point Glitch.
 #
 ############################################################################################
 
@@ -21,37 +21,39 @@ def random_single_bid(agent_id: str,
 
     agent_state = states[agent_id]
     
-    # Safety Check: If there are no auctions (end of game), stop.
+    # 1. Safety Check: If there are no auctions (End of Game), stop.
     if not auctions:
         return {"bids": {}, "pool": 0}
 
-    # Get the gold amount of the wealthiest agent (that is not us)
-    max_gold = 1
+    # 2. Strategy: Get the gold amount of the wealthiest opponent
+    max_opponent_gold = 1
     for a_id, other_agent in states.items():
         if a_id != agent_id:
-            if other_agent["gold"] > max_gold:
-                max_gold = other_agent["gold"]
+            if other_agent["gold"] > max_opponent_gold:
+                max_opponent_gold = other_agent["gold"]
         
     bids = {}
+    
+    # 3. Aggressive Bidding
     if agent_state["gold"] > 0:           
-        # Pick a random auction
-        actions = list(auctions.keys())     
-        target_auction_id = random.sample(actions, k=1)[0]
+        # Pick a random auction to dump money into
+        auction_ids = list(auctions.keys())     
+        target_auction_id = random.choice(auction_ids)
         
         # Bid between 50% and 90% of our total gold
         bid_amount = int(agent_state["gold"] * random.uniform(0.5, 0.9))        
         
-        # Strategy: Never bid more than the richest opponent has (waste of money)
-        bid_amount = min(bid_amount, max_gold + 1) # +1 to beat them
+        # Cap: Never bid more than the richest opponent has + 1 (waste of money)
+        # This prevents us from bidding 100,000 on an item when everyone else only has 5,000.
+        bid_amount = min(bid_amount, max_opponent_gold + 50) 
         
-        # Ensure we bid at least 1 gold if we have it
-        if bid_amount < 1 and agent_state["gold"] >= 1:
-            bid_amount = 1
-            
+        # Ensure bid is valid
+        if bid_amount < 1: bid_amount = 1
+        
         bids[target_auction_id] = bid_amount
 
-    # Pool Strategy: Bankruptcy Protection
-    # If we gambled everything and lost, buy back in with points so we can play again.
+    # 4. Pool Buyback (The "0 Point Fix")
+    # If we are broke (spent all gold), buy back in using points.
     points_for_pool = 0
     if agent_state["gold"] < 50 and agent_state["points"] > 20:
         points_for_pool = 20
@@ -61,9 +63,8 @@ def random_single_bid(agent_id: str,
 
 if __name__ == "__main__":    
     host = "localhost"
-    # Clean up the name generation
     agent_name = f"Random_All_In_{random.randint(1, 1000)}"
-    player_id = "random_player"
+    player_id = "random_single"
     port = 8000
 
     game = AuctionGameClient(host=host,

@@ -102,7 +102,7 @@ class ChipLeaderTheGambler:
         base = self._quant(recent[:-3], 0.50, recent[-1])
         return recent[-1] > 1.6 * max(1, base)
 
-    # ---------- POOL BUYING LOGIC (ADDED FIX) ----------
+    # ---------- POOL BUYING LOGIC ----------
     def calculate_pool_strategy(self, my_gold, my_points, pool_gold, phase, trailing):
         """
         Decides when to trade Points for Gold.
@@ -120,7 +120,7 @@ class ChipLeaderTheGambler:
         return int(buy_amount)
 
     # ---------- main strategy ----------
-    # Updated signature to accept pool arguments
+    # FIX: Added pool_gold and prev_pool_buys to arguments to match server call
     def make_bid(self, agent_id, current_round, states, auctions, prev_auctions, pool_gold, prev_pool_buys, bank_state):
         # 0) learn market from last round
         self.learn(prev_auctions or {}, agent_id)
@@ -267,7 +267,7 @@ class ChipLeaderTheGambler:
         # keep last bids (optional diagnostics)
         self._last_bids = dict(bids)
         
-        # FIX: Calculate pool buy and return correct dictionary
+        # Calculate pool buy and return correct dictionary
         pool_buy = self.calculate_pool_strategy(gold, my_pts, pool_gold, phase, trailing)
         return {"bids": bids, "pool": pool_buy}
 

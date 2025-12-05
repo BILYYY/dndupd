@@ -4,9 +4,10 @@ from dnd_auction_game.client import AuctionGameClient
 
 ############################################################################################
 #
-# random_walk (Fixed)
-#   Walks up if we won the auction, otherwise walks down.
-#   Added safety for empty auctions and pool logic.
+# Random Walk Agent (Fixed)
+#   - Walks bid price up/down based on wins/losses.
+#   - Includes Pool Logic to prevent "0 Points" glitch.
+#   - Handles empty auction lists safely.
 #
 ############################################################################################
 
@@ -28,40 +29,42 @@ class RandomWalkAgent:
         agent_state = states[agent_id]
         current_gold = agent_state["gold"]
 
-        # Safety: If no gold, reset bid to minimum
+        # Safety: If gold is very low, reset bid target to be affordable
         if current_gold < self.current_bid:
             self.current_bid = max(1, current_gold // 2)
 
-        # Move up or down based on last result
+        # Logic: Move bid Up if we won, Down if we lost
         if self.last_bid_auction_id is not None and prev_auctions:
-            # Check if our auction exists in history
             if self.last_bid_auction_id in prev_auctions:
                 auction = prev_auctions[self.last_bid_auction_id]
                 bids_for_this_auction = auction.get("bids", [])
                 
                 if bids_for_this_auction:
                     winning_bid = bids_for_this_auction[0]
-                    if winning_bid["a_id"] == agent_id: # We won
+                    if winning_bid["a_id"] == agent_id: # We won!
+                        # Bid higher next time to keep winning
                         self.current_bid += random.randint(1, self.max_move_up_or_down)
                     else: # We lost
+                        # Bid lower next time to save money
                         self.current_bid -= random.randint(1, self.max_move_up_or_down)
         
+        # Ensure bid stays positive
         self.current_bid = max(1, self.current_bid)
-        print(f"Current bid strategy: {self.current_bid}")
-    
-        # Bid for next auction
+        
+        # --- EXECUTE BID ---
         bids = {}
-        # Safety: Check if auctions exist
         if agent_state["gold"] > 0 and auctions:           
             actions = list(auctions.keys())     
             target_auction_id = random.sample(actions, k=1)[0]
 
-            # Ensure we have enough gold
+            # Bid the target amount, but don't exceed current gold
             final_bid = min(self.current_bid, agent_state["gold"])
+            
             bids[target_auction_id] = final_bid
             self.last_bid_auction_id = target_auction_id
 
-        # Pool Strategy
+        # --- POOL STRATEGY (The Fix) ---
+        # If we run out of gold, buy back in using points
         points_for_pool = 0
         if agent_state["gold"] < 50 and agent_state["points"] > 20:
             points_for_pool = 20

@@ -5,12 +5,13 @@ from collections import deque
 from dnd_auction_game.client import AuctionGameClient
 
 ################################################################################
-# GEMINI AGENT - THE HYBRID DOMINATOR
-# Strategy:
-# 1. EV Valuation: Calculates precise Expected Value of every dice bag.
-# 2. Market Tracking: Learns the "Gold per Point" ratio of the lobby.
-# 3. Pool Arbitrage: Buys from the pool whenever it is mathematically cheaper than bidding.
-# 4. Interest Hoarding: Stops spending if bank interest > 10% to compound wealth.
+# GEMINI AGENT PRO MAX - THE DOMINATOR
+# ------------------------------------------------------------------------------
+# 1. EV Valuation: Precise statistical value of dice.
+# 2. Market Tracking: Tracks both AVERAGE and MAX winning prices to counter whales.
+# 3. Pool Arbitrage: Buys from the pool if gold is "on sale" (cheap points).
+# 4. Interest Hoarding: Switches to "Savings Mode" if bank interest is high.
+# 5. End-Game Dump: Calculates perfect budget burn to zero out gold by Round 1000.
 ################################################################################
 
 # Standard EV table for dice (d2=1.5, d20=10.5, etc.)
@@ -25,7 +26,9 @@ class GeminiAgent:
         self.market_ratios = deque(maxlen=200)
         # History of winning bid amounts
         self.win_history = deque(maxlen=100)
-        # Track our own win rate to adjust aggression
+        # Track the "Whale Factor" (How much over average are the top bids?)
+        self.whale_multiplier = 1.0
+        # Track our own win rate
         self.wins = 0
         self.losses = 0
 
@@ -47,6 +50,8 @@ class GeminiAgent:
         """Analyze the battlefield from the previous round"""
         if not prev_auctions: return
 
+        round_winning_prices = []
+
         for aid, auction in prev_auctions.items():
             bids = auction.get("bids", [])
             if not bids: continue
@@ -54,7 +59,7 @@ class GeminiAgent:
             winner_id = bids[0]["a_id"]
             win_gold = bids[0]["gold"]
             
-            # Record winning price
+            round_winning_prices.append(win_gold)
             self.win_history.append(win_gold)
             
             # Record Market Ratio (Cost per Point)
@@ -69,6 +74,17 @@ class GeminiAgent:
             else:
                 self.losses += 1
 
+        # Whale Detection:
+        # If the highest bid in the round was massively higher than the average,
+        # it means someone is playing aggressively. We need to adapt.
+        if round_winning_prices:
+            avg_win = sum(round_winning_prices) / len(round_winning_prices)
+            max_win = max(round_winning_prices)
+            if avg_win > 0:
+                current_whale_factor = max_win / avg_win
+                # Smooth update of our whale tracking (don't react too fast)
+                self.whale_multiplier = (self.whale_multiplier * 0.9) + (current_whale_factor * 0.1)
+
     def calculate_pool_strategy(self, my_gold, my_points, pool_gold, phase, trailing):
         """
         The "Pool Shark" Logic.
@@ -76,22 +92,23 @@ class GeminiAgent:
         """
         buy_amount = 0
         
-        # 1. BANKRUPTCY PROTECTION
+        # 1. BANKRUPTCY PROTECTION (Priority #1)
         # If we can't afford to bid, we MUST sell points to survive.
         if my_gold < 150 and my_points > 30:
             return 30
 
-        # 2. THE ARBITRAGE CALCULATION
-        # How much gold do we get per point sold?
-        # Pool Formula: (PointsSold / TotalSold) * PoolGold
-        # We assume we are the only buyer for a conservative estimate.
+        # 2. THE ARBITRAGE CALCULATION (Oppotunistic)
         if my_points < 1: return 0
         
-        # Heuristic: If Pool is huge (>4000), gold is "on sale"
-        if pool_gold > 4000 and my_points > 100:
+        # Heuristic: If Pool is huge (>3500), gold is "on sale"
+        if pool_gold > 3500 and my_points > 100:
             # If we are trailing, take a big loan to bid huge next round
-            buy_amount = 50 if trailing else 25
+            buy_amount = 60 if trailing else 25
         
+        # Safety: Never sell if it drops us to 0
+        if buy_amount > my_points:
+            buy_amount = int(my_points * 0.9)
+
         return int(buy_amount)
 
     def make_bid(self, agent_id, current_round, states, auctions, prev_auctions, pool_gold, prev_pool_buys, bank_state):
@@ -113,33 +130,34 @@ class GeminiAgent:
         gold_limit = bank_state.get("bank_limit_per_round", [2000])[0]
         
         # SAVINGS MODE: If interest > 10% and we aren't capped, spend LESS.
-        savings_mode = (interest_rate > 1.10) and (gold < gold_limit)
+        savings_mode = (interest_rate > 1.10) and (gold < gold_limit) and (phase < 0.9)
 
         # 3. Determine Market Price
-        # Get the median and 80th percentile of "Cost per Point"
         market_ratio_median = self._percentile(self.market_ratios, 50) or 30.0
-        market_ratio_high = self._percentile(self.market_ratios, 80) or 45.0
         
         # Get average winning bid (to snipe standard bots)
         avg_win_price = sum(self.win_history)/len(self.win_history) if self.win_history else 300
 
         # 4. Budgeting
-        # Conservative early, aggressive late
-        if savings_mode:
+        if rounds_left <= 5:
+            # LIQUIDATION MODE: Spend 100% of remaining gold
+            spend_frac = 1.0 
+        elif savings_mode:
             spend_frac = 0.20 # Hoard money for interest
         elif phase < 0.4:
             spend_frac = 0.40
         elif phase < 0.8:
             spend_frac = 0.60
         else:
-            spend_frac = 0.95 # Dump everything at the end
+            spend_frac = 0.85 
 
         # Check if we are losing
         others_points = [s["points"] for aid, s in states.items() if aid != agent_id]
         trailing = bool(others_points and points < max(others_points) * 0.8)
-        if trailing: spend_frac = min(0.9, spend_frac + 0.2) # Panic spend
+        if trailing: 
+            spend_frac = min(1.0, spend_frac + 0.25) # Panic spend
 
-        reserve = 100 # Always keep a tiny bit
+        reserve = 50 # Tiny reserve
         spend_cap = int((gold - reserve) * spend_frac)
         spend_cap = max(0, spend_cap)
 
@@ -150,28 +168,30 @@ class GeminiAgent:
             if ev <= 0: continue
 
             # BASE PRICE: EV * Market Ratio
-            # We pay more for better items (High EV)
             if savings_mode:
-                target_bid = ev * (market_ratio_median * 0.8) # Look for bargains
+                target_bid = ev * (market_ratio_median * 0.85) # Look for bargains
             else:
                 target_bid = ev * market_ratio_median
 
-            # SNIPER LOGIC:
-            # If the item is good, ensure we beat the "Average Bot"
-            # Standard bots bid (Avg_Win * 1.1). We bid (Avg_Win * 1.12)
-            snipe_bid = avg_win_price * 1.12
+            # SNIPER LOGIC + WHALE TRACKING:
+            # Standard bots bid (Avg_Win * 1.1).
+            # We bid (Avg_Win * 1.12).
+            # BUT, if whales are playing, we multiply by our whale factor to match them.
             
-            # If EV is high, use the higher of Market vs Snipe
-            if ev > 40: # Good item
-                final_bid = max(target_bid, snipe_bid)
+            adjusted_snipe = avg_win_price * 1.12 * self.whale_multiplier
+            
+            # If EV is high (Top Tier Item), we MUST win it.
+            if ev > 40: 
+                final_bid = max(target_bid, adjusted_snipe)
             else:
                 final_bid = target_bid
 
-            # Cap single bid to 40% of gold (diversification)
-            final_bid = min(final_bid, gold * 0.40)
+            # Cap single bid to 45% of gold (diversification)
+            final_bid = min(final_bid, gold * 0.45)
             
             # Efficiency Score (Points per Gold)
-            efficiency = ev / max(1, final_bid * 0.5) # 0.5 accounts for cashback
+            # We use 0.5 price because we get ~50% cashback if we lose.
+            efficiency = ev / max(1, final_bid * 0.5) 
             
             ranked_auctions.append((efficiency, aid, int(final_bid)))
 
@@ -182,10 +202,10 @@ class GeminiAgent:
         bids = {}
         current_spent = 0
         
-        # Volume: How many items to bid on?
-        # Early game: precise sniping (3-4 items). Late game: Spray (8-10 items).
+        # Volume Strategy
         max_items = 4 if phase < 0.5 else 10
-        if trailing: max_items = 8
+        if trailing or rounds_left <= 5: 
+            max_items = 20 # Bid on EVERYTHING at the end
 
         for _, aid, bid in ranked_auctions[:max_items]:
             if current_spent + bid > spend_cap:
@@ -194,8 +214,9 @@ class GeminiAgent:
                 if remaining > 50: bid = remaining
                 else: break
             
-            # Jitter to avoid ties (Critical for beating clones)
-            bid = int(bid * random.uniform(1.01, 1.04))
+            # ANTI-CLONE JITTER:
+            # Randomize bid by +1% to +5% to beat bots running same logic
+            bid = int(bid * random.uniform(1.01, 1.05))
             
             if bid > 0 and (current_spent + bid) < gold:
                 bids[aid] = bid
@@ -219,14 +240,13 @@ if __name__ == "__main__":
     host = os.getenv("AH_HOST", "localhost")
     port = int(os.getenv("AH_PORT", "8000"))
     token = os.getenv("AH_GAME_TOKEN", "play123")
-    name = f"Gemini_Agent_{random.randint(100, 999)}"
+    name = f"Gemini_ProMax_{random.randint(100, 999)}"
     
-    # Using a recognizable ID so you can see it on the leaderboard
-    player_id = "GEMINI_PRIME"
+    player_id = "GEMINI_PRO_MAX"
 
     game = AuctionGameClient(host=host, agent_name=name, token=token, player_id=player_id, port=port)
     
-    print(f"🚀 Starting {name} (The Dominator)")
+    print(f"🚀 Starting {name} (Deep Brain Power)")
     print(f"📡 Connecting to {host}:{port}...")
     
     try:

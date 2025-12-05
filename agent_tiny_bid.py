@@ -1,13 +1,13 @@
 import random
 import os
-from typing import List
 from dnd_auction_game.client import AuctionGameClient
 
 ############################################################################################
 #
-# tiny_value (Fixed)
-#   Bids a tiny amount on every auction.
-#   Added checks to prevent negative gold and crash on empty auctions.
+# Tiny Value Agent (Fixed)
+#   - Bids small amounts (1-50 gold) on random auctions to maximize volume.
+#   - Includes Pool Logic to prevent "0 Points" glitch.
+#   - Safe against empty auction lists.
 #
 ############################################################################################
 
@@ -23,29 +23,33 @@ def tiny_bid(agent_id: str,
     agent_state = states[agent_id]
     current_gold = agent_state["gold"]
 
-    print(f"Current pool size: {pool}")
+    # Debug info
+    # print(f"Current pool size: {pool}")
     
     bids = {}       
 
+    # Safety: Check if auctions exist (End of Game check)
     if auctions:
-        # Sort auctions randomly to not bias the first ones
+        # Sort auctions randomly to avoid biasing the first ones in the dictionary
         auction_ids = list(auctions.keys())
         random.shuffle(auction_ids)
 
         for auction_id in auction_ids:
-            # Bid small (1-50) or whatever is left
-            bid = random.randint(1, 50) # Reduced from 200 to act truly "tiny"
+            # Bid strategy: Small amount (1-50) or whatever is left
+            bid = random.randint(1, 50) 
             
             if bid < current_gold:
                 bids[auction_id] = bid 
                 current_gold -= bid
             else:
-                # If running out of gold, just bid 1
+                # If running out of gold, just bid 1 to stay in the game
                 if current_gold > 0:
                     bids[auction_id] = 1
                     current_gold -= 1
 
-    # Pool Strategy: If we have tons of points but no gold, buy back in
+    # --- POOL STRATEGY (The Fix) ---
+    # If we have gathered many points but ran out of gold, sell some points
+    # to get back into the bidding war.
     points_for_pool = 0
     if agent_state["gold"] < 100 and agent_state["points"] > 50:
         points_for_pool = 20

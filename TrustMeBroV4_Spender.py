@@ -33,18 +33,21 @@ class TMB_V4:
     def calculate_pool_buy(self, my_gold, my_points, pool_gold, trailing):
         """Logic to buy back into game if broke"""
         buy_amount = 0
-        # Emergency: Broke
+        # Emergency: Broke (< 150g). We MUST sell points to play.
         if my_gold < 150 and my_points > 50:
             buy_amount = 30
-        # Opportunity: Huge Pool
+        
+        # Opportunity: Huge Pool (> 3500g). Gold is cheap.
         if pool_gold > 3500 and my_points > 100:
             buy_amount = 60 if trailing else 25
+            
         # Safety
         if buy_amount > my_points:
             buy_amount = int(my_points * 0.9)
         return int(buy_amount)
 
-    def make(self, agent_id, rnd, states, auctions, prev, pool_gold, bank):
+    # FIX: Added prev_pool_buys to signature to match glue code
+    def make(self, agent_id, rnd, states, auctions, prev, pool_gold, prev_pool_buys, bank):
         self.learn(prev or {})
         
         me = states[agent_id]
@@ -78,7 +81,10 @@ class TMB_V4:
         evs = {aid: EV(a) for aid, a in auctions.items()}
         evs = {aid: v for aid, v in evs.items() if v > 0 or rounds_left <= 2}
         
-        if not evs: return {"bids": {}, "pool": 0}
+        # FIX: Calculate pool buy even if no auctions!
+        if not evs: 
+            pool_buy = self.calculate_pool_buy(gold, pts, pool_gold, trailing)
+            return {"bids": {}, "pool": pool_buy}
 
         vals = sorted(evs.values())
         q1 = vals[len(vals) // 3]
@@ -126,7 +132,8 @@ _AGENT = None
 def make_bid(agent_id, current_round, states, auctions, prev_auctions, pool_gold, prev_pool_buys, bank_state):
     global _AGENT
     if _AGENT is None: _AGENT = TMB_V4()
-    return _AGENT.make(agent_id, current_round, states, auctions, prev_auctions, pool_gold, bank_state)
+    # Now passing all arguments correctly
+    return _AGENT.make(agent_id, current_round, states, auctions, prev_auctions, pool_gold, prev_pool_buys, bank_state)
 
 if __name__ == "__main__":
     host = os.getenv("AH_HOST", "localhost")
